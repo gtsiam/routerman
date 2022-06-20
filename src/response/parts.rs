@@ -1,4 +1,5 @@
 use super::{IntoResponse, ResponsePart};
+use crate::respond;
 
 macro_rules! impl_response_parts {
     () => {
@@ -24,22 +25,9 @@ macro_rules! impl_response_parts {
                 #[allow(non_snake_case)]
                 let ($first, $($rest,)* R) = self;
 
-                let (res, fmt) = match R.into_response(fmt) {
-                    (res, Some(fmt)) => (res, fmt),
-                    (res, None) => return (res, None),
-                };
-
-                let (res, fmt) = match $first.response_part(res, fmt) {
-                    (res, Some(fmt)) => (res, fmt),
-                    (res, None) => return (res, None),
-                };
-
-                $(
-                    let (res, fmt) = match $rest.response_part(res, fmt) {
-                        (res, Some(fmt)) => (res, fmt),
-                        (res, None) => return (res, None),
-                    };
-                )*
+                let (res, fmt) = respond!(R, fmt);
+                let (res, fmt) = respond!($first, res, fmt);
+                $(let (res, fmt) = respond!($rest, res, fmt);)*
 
                 (res, Some(fmt))
             }
@@ -54,18 +42,8 @@ macro_rules! impl_response_parts {
                 #[allow(non_snake_case)]
                 let ($first, $($rest),*) = self;
 
-                let (res, fmt) = match $first.response_part(res, fmt) {
-                    (res, Some(fmt)) => (res, fmt),
-                    (res, None) => return (res, None),
-                };
-
-
-                $(
-                    let (res, fmt) = match $rest.response_part(res, fmt) {
-                        (res, Some(fmt)) => (res, fmt),
-                        (res, None) => return (res, None),
-                    };
-                )*
+                let (res, fmt) = respond!($first, res, fmt);
+                $(let (res, fmt) = respond!($rest, res, fmt);)*
 
                 (res, Some(fmt))
             }

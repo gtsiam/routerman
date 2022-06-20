@@ -41,3 +41,19 @@ impl<Res, Fmt> IntoResponse<Res, Fmt> for Infallible {
         match self {}
     }
 }
+
+#[macro_export]
+macro_rules! respond {
+    ($into_response:expr, $fmt:expr) => {
+        match $into_response.into_response($fmt) {
+            (res, Some(fmt)) => (res, fmt),
+            (res, None) => return (res, None),
+        }
+    };
+    ($into_response:expr, $res:expr, $fmt:expr) => {
+        match $into_response.response_part($res, $fmt) {
+            (res, Some(fmt)) => (res, fmt),
+            (res, None) => return (res, None),
+        }
+    };
+}
