@@ -1,25 +1,24 @@
-use super::IntoResponse;
+use super::{Formatter, IntoResponse};
 use crate::Response;
-use hyper::{header, Body, StatusCode};
+use hyper::{header, Body};
 use serde::Serialize;
 
 pub struct Json<T>(pub T);
 
-impl<T> IntoResponse for Json<T>
+pub use serde_json::Error;
+
+impl<T, F> IntoResponse<F> for Json<T>
 where
     T: Serialize,
+    F: Formatter<serde_json::Error>,
 {
-    fn into_response(self) -> Response {
+    fn into_response(self, fmt: F) -> Response {
         match serde_json::to_vec(&self.0) {
             Ok(content) => Response::builder()
                 .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
                 .body(Body::from(content))
-                .into_response(),
-            Err(err) => Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.as_ref())
-                .body(Body::from(err.to_string()))
-                .into_response(),
+                .into_response(fmt),
+            Err(err) => fmt.format_error(err),
         }
     }
 }

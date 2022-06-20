@@ -1,4 +1,4 @@
-use core::fmt;
+use core::fmt::Display;
 use std::{
     convert::Infallible,
     future::{Future, Ready},
@@ -20,44 +20,75 @@ use tower_service::Service;
 
 use crate::{
     request::ext::{InvalidParamEncoding, RemoteAddrExt, RouteParamsExt},
-    response::IntoResponse,
+    response::{DefaultFormatter, IntoResponse},
     route::{HandlerFuture, Route},
     Request, Response,
 };
 
-pub struct Router(Arc<RouterBuilder>);
+pub struct Router<Fmt = DefaultFormatter> {
+    formatter: Fmt,
+    inner: Arc<RouterImpl<Fmt>>,
+}
 
-impl Router {
-    pub fn builder() -> RouterBuilder {
-        RouterBuilder::new()
+pub struct RouterImpl<Fmt> {
+    inner: matchit::Router<Route<Fmt>>,
+    default: Route<Fmt>,
+}
+
+impl<Fmt> Router<Fmt>
+where
+    Fmt: Default + Clone + Send + Sync + 'static,
+{
+    pub fn builder() -> RouterBuilder<Fmt> {
+        RouterBuilder::with_formatter(Fmt::default())
     }
 }
 
-pub struct RouterBuilder {
-    inner: matchit::Router<Route>,
-    default: Route,
+impl<Fmt> Router<Fmt>
+where
+    Fmt: Clone + Send + Sync + 'static,
+{
+    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<Fmt> {
+        RouterBuilder::with_formatter(fmt)
+    }
 }
 
-impl RouterBuilder {
-    pub fn new() -> Self {
+pub struct RouterBuilder<Fmt = DefaultFormatter> {
+    formatter: Fmt,
+    inner: matchit::Router<Route<Fmt>>,
+    default: Route<Fmt>,
+}
+
+impl<Fmt> RouterBuilder<Fmt>
+where
+    Fmt: Clone + Send + Sync + 'static,
+{
+    pub fn with_formatter(formatter: Fmt) -> Self {
         Self {
             inner: matchit::Router::new(),
-            default: Route::new(|_| async { StatusCode::NOT_FOUND.into_response() }),
+            default: Route::with_fmt(|_, fmt| async { StatusCode::NOT_FOUND.into_response(fmt) }),
+            formatter,
         }
     }
 
-    pub fn route(mut self, path: impl Into<String>, route: impl Into<Route>) -> Self {
+    pub fn route(mut self, path: impl Into<String>, route: impl Into<Route<Fmt>>) -> Self {
         self.inner.insert(path, route.into()).expect("insert route");
         self
     }
 
-    pub fn build(self) -> Router {
-        Router(Arc::new(self))
+    pub fn build(self) -> Router<Fmt> {
+        Router {
+            inner: Arc::new(RouterImpl {
+                inner: self.inner,
+                default: self.default,
+            }),
+            formatter: self.formatter,
+        }
     }
 }
 
-impl Service<&AddrStream> for Router {
-    type Response = RequestService;
+impl<Fmt: Clone> Service<&AddrStream> for Router<Fmt> {
+    type Response = RequestService<Fmt>;
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
@@ -69,17 +100,22 @@ impl Service<&AddrStream> for Router {
         let remote_addr = conn.remote_addr();
         std::future::ready(Ok(RequestService {
             remote_addr,
-            router: self.0.clone(),
+            router: self.inner.clone(),
+            formatter: self.formatter.clone(),
         }))
     }
 }
 
-pub struct RequestService {
+pub struct RequestService<Fmt> {
+    formatter: Fmt,
     remote_addr: SocketAddr,
-    router: Arc<RouterBuilder>,
+    router: Arc<RouterImpl<Fmt>>,
 }
 
-impl Service<Request> for RequestService {
+impl<Fmt> Service<Request> for RequestService<Fmt>
+where
+    Fmt: Clone + Send + Sync + 'static,
+{
     type Response = Response;
     type Error = Infallible;
     type Future = RequestFuture;
@@ -89,7 +125,7 @@ impl Service<Request> for RequestService {
     }
 
     fn call(&mut self, mut req: Request) -> Self::Future {
-        fn replace_path(uri: &Uri, path: impl fmt::Display) -> Uri {
+        fn replace_path(uri: &Uri, path: impl Display) -> Uri {
             let mut parts = uri.to_owned().into_parts();
             parts.path_and_query = parts.path_and_query.map(|pq| {
                 match pq.query() {
@@ -105,8 +141,8 @@ impl Service<Request> for RequestService {
         req.extensions_mut()
             .insert(RemoteAddrExt::from(self.remote_addr));
 
-        enum MatchResult<'a> {
-            Route(&'a Route, Option<RouteParamsExt>),
+        enum MatchResult<'a, Fmt> {
+            Route(&'a Route<Fmt>, Option<RouteParamsExt>),
             Redirect(Uri),
             InvalidParamEncoding(InvalidParamEncoding),
         }
@@ -120,11 +156,11 @@ impl Service<Request> for RequestService {
 
             Err(MatchError::ExtraTrailingSlash) => MatchResult::Redirect(replace_path(
                 req.uri(),
-                format_args!("{}/", req.uri().path()),
+                req.uri().path().strip_suffix('/').unwrap(),
             )),
             Err(MatchError::MissingTrailingSlash) => MatchResult::Redirect(replace_path(
                 req.uri(),
-                req.uri().path().strip_suffix('/').unwrap(),
+                format_args!("{}/", req.uri().path()),
             )),
         };
 
@@ -134,18 +170,18 @@ impl Service<Request> for RequestService {
                     req.extensions_mut().insert(params);
                 }
 
-                RequestFuture::Route((route.handler())(req))
+                RequestFuture::Route((route.handler())(req, self.formatter.clone()))
             }
             MatchResult::Redirect(uri) => RequestFuture::Response(Some(
                 Response::builder()
                     .status(StatusCode::PERMANENT_REDIRECT)
                     .header(header::LOCATION, uri.to_string())
                     .body(Body::empty())
-                    .into_response(),
+                    .into_response(self.formatter.clone()),
             )),
-            MatchResult::InvalidParamEncoding(_err) => {
-                RequestFuture::Response(Some(StatusCode::BAD_REQUEST.into_response()))
-            }
+            MatchResult::InvalidParamEncoding(_err) => RequestFuture::Response(Some(
+                StatusCode::BAD_REQUEST.into_response(self.formatter.clone()),
+            )),
         }
     }
 }

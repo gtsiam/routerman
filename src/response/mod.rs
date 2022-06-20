@@ -5,71 +5,88 @@ use crate::Response;
 #[cfg(feature = "json")]
 pub mod json;
 
-pub trait IntoResponse {
-    fn into_response(self) -> Response;
+pub trait IntoResponse<F> {
+    fn into_response(self, fmt: F) -> Response;
 }
 
-impl IntoResponse for Response {
-    fn into_response(self) -> Response {
+pub trait Formatter<E> {
+    fn format_error(self, err: E) -> Response;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DefaultFormatter;
+
+impl<E: std::error::Error> Formatter<E> for DefaultFormatter {
+    fn format_error(self, err: E) -> Response {
+        Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.as_ref())
+            .body(Body::from(err.to_string()))
+            .into_response(self)
+    }
+}
+
+impl<F> IntoResponse<F> for Response {
+    fn into_response(self, _fmt: F) -> Response {
         self
     }
 }
 
-impl IntoResponse for () {
-    fn into_response(self) -> Response {
+impl<F> IntoResponse<F> for () {
+    fn into_response(self, _fmt: F) -> Response {
         Response::new(Body::empty())
     }
 }
 
-impl IntoResponse for StatusCode {
-    fn into_response(self) -> Response {
-        let mut res = ().into_response();
+impl<F> IntoResponse<F> for StatusCode {
+    fn into_response(self, fmt: F) -> Response {
+        let mut res = ().into_response(fmt);
         *res.status_mut() = self;
         res
     }
 }
 
-impl IntoResponse for Body {
-    fn into_response(self) -> Response {
+impl<F> IntoResponse<F> for Body {
+    fn into_response(self, _fmt: F) -> Response {
         Response::new(self)
     }
 }
 
-impl<T, E> IntoResponse for Result<T, E>
+impl<T, E, F> IntoResponse<F> for Result<T, E>
 where
-    T: IntoResponse,
-    E: IntoResponse,
+    T: IntoResponse<F>,
+    E: IntoResponse<F>,
 {
-    fn into_response(self) -> Response {
+    fn into_response(self, fmt: F) -> Response {
         match self {
-            Ok(res) => res.into_response(),
-            Err(res) => res.into_response(),
+            Ok(res) => res.into_response(fmt),
+            Err(res) => res.into_response(fmt),
         }
     }
 }
 
-impl IntoResponse for hyper::http::Error {
-    fn into_response(self) -> Response {
-        let mut res = Body::from(self.to_string()).into_response();
+impl<F> IntoResponse<F> for hyper::http::Error {
+    fn into_response(self, fmt: F) -> Response {
+        let mut res = Body::from(self.to_string()).into_response(fmt);
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
         res
     }
 }
 
-impl IntoResponse for &'static str {
-    fn into_response(self) -> Response {
+impl<F> IntoResponse<F> for &'static str {
+    fn into_response(self, fmt: F) -> Response {
         Response::builder()
             .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.as_ref())
             .body(Body::from(self))
-            .into_response()
+            .into_response(fmt)
     }
 }
 
-impl IntoResponse for String {
-    fn into_response(self) -> Response {
+impl<F> IntoResponse<F> for String {
+    fn into_response(self, fmt: F) -> Response {
         Response::builder()
             .header(header::CONTENT_TYPE, mime::TEXT_PLAIN.as_ref())
             .body(Body::from(self))
-            .into_response()
+            .into_response(fmt)
     }
 }
