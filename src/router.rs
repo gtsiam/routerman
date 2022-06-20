@@ -25,43 +25,43 @@ use crate::{
     Request, Response,
 };
 
-pub struct Router<Fmt = DefaultFormatter> {
+pub struct Router<'h, Fmt = DefaultFormatter> {
     formatter: Fmt,
-    inner: Arc<RouterImpl<Fmt>>,
+    inner: Arc<RouterImpl<'h, Fmt>>,
 }
 
-pub struct RouterImpl<Fmt> {
-    inner: matchit::Router<Route<Fmt>>,
-    default: Route<Fmt>,
+pub struct RouterImpl<'h, Fmt> {
+    inner: matchit::Router<Route<'h, Fmt>>,
+    default: Route<'h, Fmt>,
 }
 
-impl<Fmt> Router<Fmt>
+impl<'h, Fmt> Router<'h, Fmt>
 where
-    Fmt: Default + Clone + Send + Sync + 'static,
+    Fmt: Default + Clone + Send + Sync + 'h,
 {
-    pub fn builder() -> RouterBuilder<Fmt> {
+    pub fn builder() -> RouterBuilder<'h, Fmt> {
         RouterBuilder::with_formatter(Fmt::default())
     }
 }
 
-impl<Fmt> Router<Fmt>
+impl<'h, Fmt> Router<'h, Fmt>
 where
-    Fmt: Clone + Send + Sync + 'static,
+    Fmt: Clone + Send + Sync + 'h,
 {
-    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<Fmt> {
+    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<'h, Fmt> {
         RouterBuilder::with_formatter(fmt)
     }
 }
 
-pub struct RouterBuilder<Fmt = DefaultFormatter> {
+pub struct RouterBuilder<'h, Fmt = DefaultFormatter> {
     formatter: Fmt,
-    inner: matchit::Router<Route<Fmt>>,
-    default: Route<Fmt>,
+    inner: matchit::Router<Route<'h, Fmt>>,
+    default: Route<'h, Fmt>,
 }
 
-impl<Fmt> RouterBuilder<Fmt>
+impl<'h, Fmt> RouterBuilder<'h, Fmt>
 where
-    Fmt: Clone + Send + Sync + 'static,
+    Fmt: Clone + Send + Sync + 'h,
 {
     pub fn with_formatter(formatter: Fmt) -> Self {
         Self {
@@ -71,12 +71,12 @@ where
         }
     }
 
-    pub fn route(mut self, path: impl Into<String>, route: impl Into<Route<Fmt>>) -> Self {
+    pub fn route(mut self, path: impl Into<String>, route: impl Into<Route<'h, Fmt>>) -> Self {
         self.inner.insert(path, route.into()).expect("insert route");
         self
     }
 
-    pub fn build(self) -> Router<Fmt> {
+    pub fn build(self) -> Router<'h, Fmt> {
         Router {
             inner: Arc::new(RouterImpl {
                 inner: self.inner,
@@ -87,8 +87,8 @@ where
     }
 }
 
-impl<Fmt: Clone> Service<&AddrStream> for Router<Fmt> {
-    type Response = RequestService<Fmt>;
+impl<'h, Fmt: Clone> Service<&AddrStream> for Router<'h, Fmt> {
+    type Response = RequestService<'h, Fmt>;
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
@@ -106,19 +106,19 @@ impl<Fmt: Clone> Service<&AddrStream> for Router<Fmt> {
     }
 }
 
-pub struct RequestService<Fmt> {
+pub struct RequestService<'h, Fmt> {
     formatter: Fmt,
     remote_addr: SocketAddr,
-    router: Arc<RouterImpl<Fmt>>,
+    router: Arc<RouterImpl<'h, Fmt>>,
 }
 
-impl<Fmt> Service<Request> for RequestService<Fmt>
+impl<'h, Fmt> Service<Request> for RequestService<'h, Fmt>
 where
-    Fmt: Clone + Send + Sync + 'static,
+    Fmt: Clone + Send + Sync + 'h,
 {
     type Response = Response;
     type Error = Infallible;
-    type Future = RequestFuture;
+    type Future = RequestFuture<'h>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -141,8 +141,8 @@ where
         req.extensions_mut()
             .insert(RemoteAddrExt::from(self.remote_addr));
 
-        enum MatchResult<'a, Fmt> {
-            Route(&'a Route<Fmt>, Option<RouteParamsExt>),
+        enum MatchResult<'a, 'h, Fmt> {
+            Route(&'a Route<'h, Fmt>, Option<RouteParamsExt>),
             Redirect(Uri),
             InvalidParamEncoding(InvalidParamEncoding),
         }
@@ -187,12 +187,12 @@ where
 }
 
 #[pin_project(project = RequestFutureProj)]
-pub enum RequestFuture {
-    Route(#[pin] HandlerFuture),
+pub enum RequestFuture<'h> {
+    Route(#[pin] HandlerFuture<'h>),
     Response(Option<Response>),
 }
 
-impl Future for RequestFuture {
+impl<'h> Future for RequestFuture<'h> {
     type Output = Result<Response, Infallible>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

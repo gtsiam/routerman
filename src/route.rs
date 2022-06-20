@@ -4,20 +4,20 @@ use futures_util::{Future, FutureExt};
 
 use crate::{response::IntoResponse, Request, Response};
 
-pub(crate) type HandlerFuture = Pin<Box<dyn Future<Output = Response> + Send>>;
-pub(crate) type Handler<Fmt> = dyn Fn(Request, Fmt) -> HandlerFuture + Send + Sync;
+pub(crate) type HandlerFuture<'h> = Pin<Box<dyn Future<Output = Response> + Send + 'h>>;
+pub(crate) type Handler<'h, Fmt> = dyn Fn(Request, Fmt) -> HandlerFuture<'h> + Send + Sync + 'h;
 
 #[derive(Clone)]
-pub struct Route<Fmt>(Arc<Handler<Fmt>>);
+pub struct Route<'h, Fmt>(Arc<Handler<'h, Fmt>>);
 
-impl<Fmt> Route<Fmt>
+impl<'h, Fmt> Route<'h, Fmt>
 where
-    Fmt: Send + Sync + 'static,
+    Fmt: Send + Sync + 'h,
 {
     pub fn new<H, Fut, Res>(handler: H) -> Self
     where
-        H: Fn(Request) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Res> + Send + 'static,
+        H: Fn(Request) -> Fut + Send + Sync + 'h,
+        Fut: Future<Output = Res> + Send + 'h,
         Res: IntoResponse<Fmt>,
     {
         Self(Arc::new(move |req, fmt| {
@@ -27,8 +27,8 @@ where
 
     pub fn with_fmt<H, Fut, Res>(handler: H) -> Self
     where
-        H: Fn(Request, Fmt) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Res> + Send + 'static,
+        H: Fn(Request, Fmt) -> Fut + Send + Sync + 'h,
+        Fut: Future<Output = Res> + Send + 'h,
         Res: IntoResponse<Fmt>,
         Fmt: Clone,
     {
@@ -37,41 +37,23 @@ where
         }))
     }
 
-    pub fn call(&self, req: Request, fmt: Fmt) -> impl Future<Output = Response> {
+    pub fn call(&self, req: Request, fmt: Fmt) -> impl Future<Output = Response> + 'h {
         (self.0)(req, fmt)
     }
 
-    pub(crate) fn handler(&self) -> &Handler<Fmt> {
+    pub(crate) fn handler(&self) -> &Handler<'h, Fmt> {
         &*self.0
     }
 }
 
-pub trait Func<Args> {
-    type Output;
-
-    fn call(&self, args: Args) -> Self::Output;
-}
-
-impl<H, Fut, Res, Fmt> From<H> for Route<Fmt>
+impl<'h, H, Fut, Res, Fmt> From<H> for Route<'h, Fmt>
 where
-    H: Fn(Request) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Res> + Send + 'static,
+    H: Fn(Request) -> Fut + Send + Sync + 'h,
+    Fut: Future<Output = Res> + Send + 'h,
     Res: IntoResponse<Fmt>,
-    Fmt: Send + Sync + 'static,
+    Fmt: Send + Sync + 'h,
 {
     fn from(handler: H) -> Self {
         Self::new(handler)
     }
 }
-
-// impl<H, Fut, Res, Fmt> From<H> for Route<Fmt>
-// where
-//     H: Fn(Request, &Fmt) -> Fut + Send + Sync + 'static,
-//     Fut: Future<Output = Res> + Send + 'static,
-//     Res: IntoResponse<Fmt>,
-//     Fmt: Send + Sync + 'static,
-// {
-//     fn from(handler: H) -> Self {
-//         Self::with_fmt(handler)
-//     }
-// }
