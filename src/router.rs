@@ -86,6 +86,11 @@ where
         self
     }
 
+    pub fn default_route(mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> Self {
+        self.default = route.into();
+        self
+    }
+
     pub fn build(self) -> Router<'h, Req, Res, Fmt> {
         Router {
             inner: Arc::new(RouterImpl {

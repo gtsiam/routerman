@@ -2,8 +2,6 @@ use std::{convert::Infallible, error::Error as StdError};
 
 mod hyper;
 
-#[cfg(feature = "json")]
-pub mod json;
 mod parts;
 
 pub trait IntoResponse<Res, Fmt> {

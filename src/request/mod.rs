@@ -1,6 +1,7 @@
 pub(crate) mod ext;
 pub(crate) mod params;
 
+pub mod extract;
 use std::net::SocketAddr;
 
 use self::{
@@ -10,7 +11,6 @@ use self::{
 
 pub trait RequestExt {
     fn params(&self) -> &RouteParams;
-
     fn remote_address(&self) -> &SocketAddr;
 }
 

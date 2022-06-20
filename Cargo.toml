@@ -18,6 +18,11 @@ percent-encoding = "2.1.0"
 serde = { version = "1.0.137", optional = true }
 serde_json = { version = "1.0.81", optional = true }
 
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+hyper = { version = "0.14.19", features = ["full"] }
+thiserror = "1.0.31"
+
 [features]
 default = ["json"]
 json = ["serde", "serde_json"]
