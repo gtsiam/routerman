@@ -1,10 +1,23 @@
 [package]
 name = "routerman"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
-description = "Minimal routing library for hyper (WIP)"
+description = "Minimal routing library for hyper"
 license = "MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+repository = "https://github.com/gtsiam/routerman"
 
 [dependencies]
+futures-util = "0.3.21"
+hyper = { version = "0.14.19", features = ["server", "tcp"] }
+matchit = "0.6.0"
+pin-project = "1.0.10"
+tower-service = "0.3.2"
+mime = "0.3.16"
+percent-encoding = "2.1.0"
+
+serde = { version = "1.0.137", optional = true }
+serde_json = { version = "1.0.81", optional = true }
+
+[features]
+default = ["json"]
+json = ["serde", "serde_json"]
