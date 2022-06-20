@@ -20,7 +20,7 @@ use tower_service::Service;
 
 use crate::{
     request::ext::{InvalidParamEncoding, RemoteAddrExt, RouteParamsExt},
-    response::{DefaultFormatter, IntoResponse},
+    response::{DefaultFormatter, Formatter, IntoResponse},
     route::{HandlerFuture, Route},
 };
 
@@ -127,7 +127,7 @@ pub struct RequestService<'h, Req, Res, Fmt> {
 
 impl<'h, Fmt, B> Service<Request<B>> for RequestService<'h, Request<B>, Response<Body>, Fmt>
 where
-    Fmt: Clone + Send + Sync + 'h,
+    Fmt: Formatter<Response<Body>, hyper::http::Error> + Clone + Send + Sync + 'h,
 {
     type Response = Response<Body>;
     type Error = Infallible;
@@ -190,10 +190,13 @@ where
                     .status(StatusCode::PERMANENT_REDIRECT)
                     .header(header::LOCATION, uri.to_string())
                     .body(Body::empty())
-                    .into_response(self.formatter.clone()),
+                    .into_response(self.formatter.clone())
+                    .0,
             )),
             MatchResult::InvalidParamEncoding(_err) => RequestFuture::Response(Some(
-                StatusCode::BAD_REQUEST.into_response(self.formatter.clone()),
+                StatusCode::BAD_REQUEST
+                    .into_response(self.formatter.clone())
+                    .0,
             )),
         }
     }

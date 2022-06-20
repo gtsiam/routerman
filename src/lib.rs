@@ -1,8 +1,11 @@
+use hyper::{Body, Request, Response};
+use response::DefaultFormatter;
+use router::Router;
+
 pub mod method;
 pub mod request;
 pub mod response;
 pub mod route;
 pub mod router;
 
-pub type HyperRouter =
-    router::Router<'static, hyper::Request<hyper::Body>, hyper::Response<hyper::Body>>;
+pub type HyperRouter<Fmt = DefaultFormatter> = Router<'static, Request<Body>, Response<Body>, Fmt>;

@@ -19,23 +19,17 @@ where
     where
         H: Fn(Req) -> Fut + Send + Sync + 'h,
         Fut: Future<Output = Out> + Send + 'h,
-        Out: IntoResponse<Fmt, Res>,
+        Out: IntoResponse<Res, Fmt>,
     {
-        Self(Arc::new(move |req, fmt| {
-            Box::pin(handler(req).map(|res| res.into_response(fmt)))
-        }))
+        Self::with_fmt(move |req, fmt| handler(req).map(|res| res.into_response(fmt).0))
     }
 
-    pub fn with_fmt<H, Fut, Out>(handler: H) -> Self
+    pub fn with_fmt<H, Fut>(handler: H) -> Self
     where
         H: Fn(Req, Fmt) -> Fut + Send + Sync + 'h,
-        Fut: Future<Output = Out> + Send + 'h,
-        Out: IntoResponse<Fmt, Res>,
-        Fmt: Clone,
+        Fut: Future<Output = Res> + Send + 'h,
     {
-        Self(Arc::new(move |req, fmt| {
-            Box::pin(handler(req, fmt.clone()).map(|res| res.into_response(fmt)))
-        }))
+        Self(Arc::new(move |req, fmt| Box::pin(handler(req, fmt))))
     }
 
     // pub fn call(&self, req: Req, fmt: Fmt) -> impl Future<Output = Res> + 'h {
@@ -51,7 +45,7 @@ impl<'h, H, Fut, Req, Res, Fmt, Out> From<H> for Route<'h, Req, Res, Fmt>
 where
     H: Fn(Req) -> Fut + Send + Sync + 'h,
     Fut: Future<Output = Out> + Send + 'h,
-    Out: IntoResponse<Fmt, Res>,
+    Out: IntoResponse<Res, Fmt>,
     Fmt: Send + Sync + 'h,
 {
     fn from(handler: H) -> Self {

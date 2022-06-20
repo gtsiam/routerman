@@ -5,7 +5,7 @@ use hyper::{
     Body, Method, Request, Response, StatusCode,
 };
 
-use crate::response::IntoResponse;
+use crate::response::{Formatter, IntoResponse};
 use crate::route::Route;
 
 pub struct MethodRouter<'h, Req, Res, Fmt> {
@@ -131,7 +131,7 @@ impl<'h, Req, Res, Fmt> core::ops::BitOrAssign<Self> for MethodRouter<'h, Req, R
 impl<'h, Fmt, B> From<MethodRouter<'h, Request<B>, Response<Body>, Fmt>>
     for Route<'h, Request<B>, Response<Body>, Fmt>
 where
-    Fmt: Clone + Send + Sync + 'h,
+    Fmt: Formatter<Response<Body>, hyper::http::Error> + Send + Sync + 'h,
     B: 'h,
 {
     fn from(r: MethodRouter<'h, Request<B>, Response<Body>, Fmt>) -> Self {
@@ -148,6 +148,7 @@ where
                                 .header(header::ALLOW, allow_header)
                                 .body(Body::empty())
                                 .into_response(fmt)
+                                .0
                         })
                     }
                 },
