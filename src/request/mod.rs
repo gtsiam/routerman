@@ -3,8 +3,6 @@ pub(crate) mod params;
 
 use std::net::SocketAddr;
 
-use crate::Request;
-
 use self::{
     ext::{RemoteAddrExt, RouteParamsExt},
     params::RouteParams,
@@ -16,7 +14,7 @@ pub trait RequestExt {
     fn remote_address(&self) -> &SocketAddr;
 }
 
-impl RequestExt for Request {
+impl<B> RequestExt for hyper::Request<B> {
     fn params(&self) -> &RouteParams {
         &*self
             .extensions()

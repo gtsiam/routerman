@@ -4,5 +4,5 @@ pub mod response;
 pub mod route;
 pub mod router;
 
-pub type Request<B = hyper::Body> = hyper::Request<B>;
-pub type Response<B = hyper::Body> = hyper::Response<B>;
+pub type HyperRouter =
+    router::Router<'static, hyper::Request<hyper::Body>, hyper::Response<hyper::Body>>;

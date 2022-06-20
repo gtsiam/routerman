@@ -12,7 +12,7 @@ use futures_util::ready;
 use hyper::{
     header::{self},
     server::conn::AddrStream,
-    Body, StatusCode, Uri,
+    Body, Request, Response, StatusCode, Uri,
 };
 use matchit::MatchError;
 use pin_project::pin_project;
@@ -22,61 +22,71 @@ use crate::{
     request::ext::{InvalidParamEncoding, RemoteAddrExt, RouteParamsExt},
     response::{DefaultFormatter, IntoResponse},
     route::{HandlerFuture, Route},
-    Request, Response,
 };
 
-pub struct Router<'h, Fmt = DefaultFormatter, B = hyper::Body> {
+pub struct Router<'h, Req, Res, Fmt = DefaultFormatter> {
     formatter: Fmt,
-    inner: Arc<RouterImpl<'h, Fmt, B>>,
+    inner: Arc<RouterImpl<'h, Req, Res, Fmt>>,
 }
 
-struct RouterImpl<'h, Fmt, B> {
-    inner: matchit::Router<Route<'h, Fmt, B>>,
-    default: Route<'h, Fmt, B>,
+struct RouterImpl<'h, Req, Res, Fmt> {
+    inner: matchit::Router<Route<'h, Req, Res, Fmt>>,
+    default: Route<'h, Req, Res, Fmt>,
 }
 
-impl<'h, Fmt> Router<'h, Fmt>
+impl<'h, Req, Res, Fmt> Router<'h, Req, Res, Fmt>
 where
+    Req: Send + 'static,
     Fmt: Default + Clone + Send + Sync + 'h,
 {
-    pub fn builder() -> RouterBuilder<'h, Fmt> {
+    pub fn builder() -> RouterBuilder<'h, Req, Res, Fmt> {
         RouterBuilder::with_formatter(Fmt::default())
     }
 }
 
-impl<'h, Fmt> Router<'h, Fmt>
+impl<'h, Req, Res, Fmt> Router<'h, Req, Res, Fmt>
 where
+    Req: Send + 'static,
     Fmt: Clone + Send + Sync + 'h,
 {
-    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<'h, Fmt> {
+    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<'h, Req, Res, Fmt> {
         RouterBuilder::with_formatter(fmt)
     }
 }
 
-pub struct RouterBuilder<'h, Fmt = DefaultFormatter, B = hyper::Body> {
+pub struct RouterBuilder<'h, Req, Res, Fmt = DefaultFormatter> {
     formatter: Fmt,
-    inner: matchit::Router<Route<'h, Fmt, B>>,
-    default: Route<'h, Fmt, B>,
+    inner: matchit::Router<Route<'h, Req, Res, Fmt>>,
+    default: Route<'h, Req, Res, Fmt>,
 }
 
-impl<'h, Fmt, B> RouterBuilder<'h, Fmt, B>
+impl<'h, Req, Res, Fmt> RouterBuilder<'h, Req, Res, Fmt>
 where
+    Req: Send + 'static,
     Fmt: Clone + Send + Sync + 'h,
 {
     pub fn with_formatter(formatter: Fmt) -> Self {
+        async fn default_fallback<Req>(_req: Req) -> Infallible {
+            panic!("No default route")
+        }
+
         Self {
             inner: matchit::Router::new(),
-            default: Route::with_fmt(|_, fmt| async { StatusCode::NOT_FOUND.into_response(fmt) }),
+            default: Route::new(default_fallback),
             formatter,
         }
     }
 
-    pub fn route(mut self, path: impl Into<String>, route: impl Into<Route<'h, Fmt, B>>) -> Self {
+    pub fn route(
+        mut self,
+        path: impl Into<String>,
+        route: impl Into<Route<'h, Req, Res, Fmt>>,
+    ) -> Self {
         self.inner.insert(path, route.into()).expect("insert route");
         self
     }
 
-    pub fn build(self) -> Router<'h, Fmt, B> {
+    pub fn build(self) -> Router<'h, Req, Res, Fmt> {
         Router {
             inner: Arc::new(RouterImpl {
                 inner: self.inner,
@@ -87,11 +97,11 @@ where
     }
 }
 
-impl<'h, Fmt, B> Service<&AddrStream> for Router<'h, Fmt, B>
+impl<'h, Req, Res, Fmt> Service<&AddrStream> for Router<'h, Req, Res, Fmt>
 where
     Fmt: Clone,
 {
-    type Response = RequestService<'h, Fmt, B>;
+    type Response = RequestService<'h, Req, Res, Fmt>;
     type Error = Infallible;
     type Future = Ready<Result<Self::Response, Self::Error>>;
 
@@ -109,19 +119,19 @@ where
     }
 }
 
-pub struct RequestService<'h, Fmt, B> {
+pub struct RequestService<'h, Req, Res, Fmt> {
     formatter: Fmt,
     remote_addr: SocketAddr,
-    router: Arc<RouterImpl<'h, Fmt, B>>,
+    router: Arc<RouterImpl<'h, Req, Res, Fmt>>,
 }
 
-impl<'h, Fmt, B> Service<Request<B>> for RequestService<'h, Fmt, B>
+impl<'h, Fmt, B> Service<Request<B>> for RequestService<'h, Request<B>, Response<Body>, Fmt>
 where
     Fmt: Clone + Send + Sync + 'h,
 {
-    type Response = Response;
+    type Response = Response<Body>;
     type Error = Infallible;
-    type Future = RequestFuture<'h>;
+    type Future = RequestFuture<'h, Self::Response>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -144,8 +154,8 @@ where
         req.extensions_mut()
             .insert(RemoteAddrExt::from(self.remote_addr));
 
-        enum MatchResult<'a, 'h, Fmt, B> {
-            Route(&'a Route<'h, Fmt, B>, Option<RouteParamsExt>),
+        enum MatchResult<'a, 'h, Req, Res, Fmt> {
+            Route(&'a Route<'h, Req, Res, Fmt>, Option<RouteParamsExt>),
             Redirect(Uri),
             InvalidParamEncoding(InvalidParamEncoding),
         }
@@ -190,13 +200,13 @@ where
 }
 
 #[pin_project(project = RequestFutureProj)]
-pub enum RequestFuture<'h> {
-    Route(#[pin] HandlerFuture<'h>),
-    Response(Option<Response>),
+pub enum RequestFuture<'h, Res> {
+    Route(#[pin] HandlerFuture<'h, Res>),
+    Response(Option<Res>),
 }
 
-impl<'h> Future for RequestFuture<'h> {
-    type Output = Result<Response, Infallible>;
+impl<'h, Res> Future for RequestFuture<'h, Res> {
+    type Output = Result<Res, Infallible>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.as_mut().project() {

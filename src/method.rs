@@ -2,23 +2,23 @@ use std::collections::HashMap;
 
 use hyper::{
     header::{self, HeaderValue},
-    Body, Method, StatusCode,
+    Body, Method, Request, Response, StatusCode,
 };
 
-use crate::{response::IntoResponse, Request};
-use crate::{route::Route, Response};
+use crate::response::IntoResponse;
+use crate::route::Route;
 
-pub struct MethodRouter<'h, Fmt, B> {
-    handlers: HashMap<Method, Route<'h, Fmt, B>>,
-    fallback: MethodFallback<'h, Fmt, B>,
+pub struct MethodRouter<'h, Req, Res, Fmt> {
+    handlers: HashMap<Method, Route<'h, Req, Res, Fmt>>,
+    fallback: MethodFallback<'h, Req, Res, Fmt>,
 }
 
-enum MethodFallback<'h, Fmt, B> {
-    Route(Route<'h, Fmt, B>),
+enum MethodFallback<'h, Req, Res, Fmt> {
+    Route(Route<'h, Req, Res, Fmt>),
     None { allow_header: HeaderValue },
 }
 
-impl<'h, Fmt, B> MethodRouter<'h, Fmt, B> {
+impl<'h, Req, Res, Fmt> MethodRouter<'h, Req, Res, Fmt> {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
@@ -28,25 +28,29 @@ impl<'h, Fmt, B> MethodRouter<'h, Fmt, B> {
         }
     }
 
-    pub fn set_method(&mut self, method: Method, route: impl Into<Route<'h, Fmt, B>>) -> &mut Self {
+    pub fn set_method(
+        &mut self,
+        method: Method,
+        route: impl Into<Route<'h, Req, Res, Fmt>>,
+    ) -> &mut Self {
         self.handlers.insert(method, route.into());
         self.update_allow_header();
         self
     }
 
     #[inline]
-    pub fn method(mut self, method: Method, route: impl Into<Route<'h, Fmt, B>>) -> Self {
+    pub fn method(mut self, method: Method, route: impl Into<Route<'h, Req, Res, Fmt>>) -> Self {
         self.set_method(method, route);
         self
     }
 
-    pub fn set_fallback(&mut self, route: impl Into<Route<'h, Fmt, B>>) -> &mut Self {
+    pub fn set_fallback(&mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> &mut Self {
         self.fallback = MethodFallback::Route(route.into());
         self
     }
 
     #[inline]
-    pub fn fallback(mut self, route: impl Into<Route<'h, Fmt, B>>) -> Self {
+    pub fn fallback(mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> Self {
         self.set_fallback(route);
         self
     }
@@ -89,7 +93,9 @@ macro_rules! impl_method_helpers {
     ($($name:ident -> $method:ident)*) => {
         $(
             #[inline]
-            pub fn $name<'h, Fmt, B>(route: impl Into<Route<'h, Fmt, B>>) -> MethodRouter<'h, Fmt, B> {
+            pub fn $name<'h, Req, Res, Fmt>(
+                route: impl Into<Route<'h, Req, Res, Fmt>>
+            ) -> MethodRouter<'h, Req, Res, Fmt> {
                 MethodRouter::new().method(Method::$method, route)
             }
         )*
@@ -108,7 +114,7 @@ impl_method_helpers! {
     trace -> TRACE
 }
 
-impl<'h, Fmt, B> core::ops::BitOr<Self> for MethodRouter<'h, Fmt, B> {
+impl<'h, Req, Res, Fmt> core::ops::BitOr<Self> for MethodRouter<'h, Req, Res, Fmt> {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -116,18 +122,19 @@ impl<'h, Fmt, B> core::ops::BitOr<Self> for MethodRouter<'h, Fmt, B> {
     }
 }
 
-impl<'h, Fmt, B> core::ops::BitOrAssign<Self> for MethodRouter<'h, Fmt, B> {
+impl<'h, Req, Res, Fmt> core::ops::BitOrAssign<Self> for MethodRouter<'h, Req, Res, Fmt> {
     fn bitor_assign(&mut self, rhs: Self) {
         self.merge(rhs)
     }
 }
 
-impl<'h, Fmt, B> From<MethodRouter<'h, Fmt, B>> for Route<'h, Fmt, B>
+impl<'h, Fmt, B> From<MethodRouter<'h, Request<B>, Response<Body>, Fmt>>
+    for Route<'h, Request<B>, Response<Body>, Fmt>
 where
     Fmt: Clone + Send + Sync + 'h,
     B: 'h,
 {
-    fn from(r: MethodRouter<'h, Fmt, B>) -> Self {
+    fn from(r: MethodRouter<'h, Request<B>, Response<Body>, Fmt>) -> Self {
         Route::with_fmt(
             move |req: Request<B>, fmt: Fmt| match r.handlers.get(req.method()) {
                 Some(route) => (route.handler())(req, fmt),
@@ -136,7 +143,7 @@ where
                     MethodFallback::None { allow_header } => {
                         let allow_header = allow_header.clone();
                         Box::pin(async move {
-                            Response::builder()
+                            hyper::Response::builder()
                                 .status(StatusCode::METHOD_NOT_ALLOWED)
                                 .header(header::ALLOW, allow_header)
                                 .body(Body::empty())
@@ -149,7 +156,7 @@ where
     }
 }
 
-impl<'h, Fmt, B> Default for MethodRouter<'h, Fmt, B> {
+impl<'h, Req, Res, Fmt> Default for MethodRouter<'h, Req, Res, Fmt> {
     fn default() -> Self {
         Self::new()
     }
