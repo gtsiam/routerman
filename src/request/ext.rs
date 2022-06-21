@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, ops::Deref};
 
+use thiserror::Error;
+
 use super::params::RouteParams;
 
 pub struct RemoteAddrExt(SocketAddr);
@@ -28,6 +30,8 @@ impl Deref for RouteParamsExt {
     }
 }
 
+#[derive(Debug, Error)]
+#[error("invalid param encoding for key `{0}`")]
 pub struct InvalidParamEncoding(Box<str>);
 
 impl<'k, 'v> TryFrom<matchit::Params<'k, 'v>> for RouteParamsExt {

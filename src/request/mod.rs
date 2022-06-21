@@ -4,10 +4,16 @@ pub(crate) mod params;
 pub mod extract;
 use std::net::SocketAddr;
 
+use hyper::Body;
+
 use self::{
     ext::{RemoteAddrExt, RouteParamsExt},
     params::RouteParams,
 };
+
+// pub struct Request {
+//     inner: hyper::Request<Body>,
+// }
 
 pub trait RequestExt {
     fn params(&self) -> &RouteParams;

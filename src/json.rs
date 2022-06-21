@@ -1,11 +1,12 @@
 //! Utilities for json serialization and deserialization
 
+use crate::mime;
 use crate::request::extract::ExtractFrom;
-use crate::response::{Formatter, IntoResponse};
+use crate::response::{DefaultFormatter, Formatter, IntoResponse};
 use futures_util::Future;
 use hyper::body::HttpBody;
-use hyper::Request;
 use hyper::{body::Bytes, header, Body, Response};
+use hyper::{Request, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
@@ -124,6 +125,14 @@ where
     }
 }
 
+impl Formatter<Response<Body>, serde_json::Error> for DefaultFormatter {
+    fn format_error(self, err: serde_json::Error) -> Response<Body> {
+        (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+            .into_response(self)
+            .0
+    }
+}
+
 impl<T, Fmt> IntoResponse<Response<Body>, Fmt> for Json<T>
 where
     T: Serialize,
@@ -132,9 +141,10 @@ where
 {
     fn into_response(self, fmt: Fmt) -> (Response<Body>, Option<Fmt>) {
         match serde_json::to_vec(&self.0) {
-            Ok(content) => Response::builder()
-                .header(header::CONTENT_TYPE, mime::APPLICATION_JSON.as_ref())
-                .body(Body::from(content))
+            Ok(content) => (
+                [(header::CONTENT_TYPE, mime::APPLICATION_JSON.header())],
+                Response::new(Body::from(content)),
+            )
                 .into_response(fmt),
             Err(err) => (fmt.format_error(err), None),
         }

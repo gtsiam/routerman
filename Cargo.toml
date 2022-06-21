@@ -12,11 +12,11 @@ hyper = { version = "0.14.19", features = ["server", "tcp"] }
 matchit = "0.6.0"
 pin-project = "1.0.10"
 tower-service = "0.3.2"
-mime = "0.3.16"
 percent-encoding = "2.1.0"
 
 serde = { version = "1.0.137", optional = true }
 serde_json = { version = "1.0.81", optional = true }
+thiserror = "1.0.31"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

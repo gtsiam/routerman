@@ -1,8 +1,12 @@
 use std::{convert::Infallible, error::Error as StdError};
 
-mod hyper;
-
+use hyper::Body;
+mod impls;
 mod parts;
+
+// pub struct Response {
+//     inner: hyper::Response<Body>,
+// }
 
 pub trait IntoResponse<Res, Fmt> {
     fn into_response(self, fmt: Fmt) -> (Res, Option<Fmt>);
@@ -34,6 +38,12 @@ where
     }
 }
 
+impl<Res, Fmt> Formatter<Res, Infallible> for Fmt {
+    fn format_error(self, err: Infallible) -> Res {
+        match err {}
+    }
+}
+
 impl<Res, Fmt> IntoResponse<Res, Fmt> for Infallible {
     fn into_response(self, _fmt: Fmt) -> (Res, Option<Fmt>) {
         match self {}
@@ -52,6 +62,16 @@ macro_rules! respond {
         match $into_response.response_part($res, $fmt) {
             (res, Some(fmt)) => (res, fmt),
             (res, None) => return (res, None),
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! try_respond {
+    ($result:expr, $formatter:expr) => {
+        match $result {
+            Ok(val) => val,
+            Err(err) => return ($formatter.format_error(err), None),
         }
     };
 }

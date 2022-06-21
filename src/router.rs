@@ -2,6 +2,7 @@ use core::fmt::Display;
 use std::{
     convert::Infallible,
     future::{Future, Ready},
+    marker::PhantomData,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
@@ -9,19 +10,16 @@ use std::{
 };
 
 use futures_util::ready;
-use hyper::{
-    header::{self},
-    server::conn::AddrStream,
-    Body, Request, Response, StatusCode, Uri,
-};
+use hyper::{header::HeaderValue, server::conn::AddrStream, Body, Request, Response, Uri};
 use matchit::MatchError;
 use pin_project::pin_project;
+use thiserror::Error;
 use tower_service::Service;
 
 use crate::{
     request::ext::{InvalidParamEncoding, RemoteAddrExt, RouteParamsExt},
-    response::{DefaultFormatter, Formatter, IntoResponse},
-    route::{HandlerFuture, Route},
+    response::{DefaultFormatter, Formatter},
+    route::{HandlerFuture, Route, RouteHandler},
 };
 
 pub struct Router<'h, Req, Res, Fmt = DefaultFormatter> {
@@ -31,33 +29,23 @@ pub struct Router<'h, Req, Res, Fmt = DefaultFormatter> {
 
 struct RouterImpl<'h, Req, Res, Fmt> {
     inner: matchit::Router<Route<'h, Req, Res, Fmt>>,
-    default: Route<'h, Req, Res, Fmt>,
+    default: Option<Route<'h, Req, Res, Fmt>>,
 }
 
-impl<'h, Req, Res, Fmt> Router<'h, Req, Res, Fmt>
-where
-    Req: Send + 'static,
-    Fmt: Default + Clone + Send + Sync + 'h,
-{
+impl<'h, Req, Res, Fmt> Router<'h, Req, Res, Fmt> {
     pub fn builder() -> RouterBuilder<'h, Req, Res, Fmt> {
-        RouterBuilder::with_formatter(Fmt::default())
+        RouterBuilder {
+            routes: Vec::new(),
+            default: None,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl<'h, Req, Res, Fmt> Router<'h, Req, Res, Fmt>
-where
-    Req: Send + 'static,
-    Fmt: Clone + Send + Sync + 'h,
-{
-    pub fn with_formatter(fmt: Fmt) -> RouterBuilder<'h, Req, Res, Fmt> {
-        RouterBuilder::with_formatter(fmt)
-    }
-}
-
-pub struct RouterBuilder<'h, Req, Res, Fmt = DefaultFormatter> {
-    formatter: Fmt,
-    inner: matchit::Router<Route<'h, Req, Res, Fmt>>,
-    default: Route<'h, Req, Res, Fmt>,
+pub struct RouterBuilder<'h, Req, Res, Fmt> {
+    routes: Vec<(String, Route<'h, Req, Res, Fmt>)>,
+    default: Option<Route<'h, Req, Res, Fmt>>,
+    _phantom: PhantomData<Fmt>,
 }
 
 impl<'h, Req, Res, Fmt> RouterBuilder<'h, Req, Res, Fmt>
@@ -65,39 +53,64 @@ where
     Req: Send + 'static,
     Fmt: Clone + Send + Sync + 'h,
 {
-    pub fn with_formatter(formatter: Fmt) -> Self {
-        async fn default_fallback<Req>(_req: Req) -> Infallible {
-            panic!("No default route")
+    pub fn route<P, H, Args>(mut self, path: P, handler: H) -> Self
+    where
+        P: Into<String>,
+        H: RouteHandler<'h, Req, Res, Fmt, Args>,
+    {
+        self.routes.push((path.into(), handler.into_route()));
+        self
+    }
+
+    pub fn default_route<H, Args>(mut self, route: H) -> Self
+    where
+        H: RouteHandler<'h, Req, Res, Fmt, Args>,
+    {
+        self.default = Some(route.into_route());
+        self
+    }
+
+    pub fn merge(self, router: RouterBuilder<'h, Req, Res, Fmt>) -> Self {
+        let Self {
+            mut routes,
+            mut default,
+            _phantom,
+        } = self;
+
+        // Record all the new routes
+        for (path, route) in router.routes {
+            routes.push((path, route));
+        }
+
+        // Merge default routes
+        if let Some(route) = router.default {
+            if let Some(_) = default.replace(route) {
+                panic!("cannot merge routers with conflicting default routes")
+            }
         }
 
         Self {
-            inner: matchit::Router::new(),
-            default: Route::new(default_fallback),
-            formatter,
+            routes,
+            default,
+            _phantom,
         }
     }
 
-    pub fn route(
-        mut self,
-        path: impl Into<String>,
-        route: impl Into<Route<'h, Req, Res, Fmt>>,
-    ) -> Self {
-        self.inner.insert(path, route.into()).expect("insert route");
-        self
-    }
+    pub fn build(self) -> Router<'h, Req, Res, Fmt>
+    where
+        Fmt: Default,
+    {
+        let mut inner = matchit::Router::new();
+        for (path, route) in self.routes.into_iter() {
+            inner.insert(path, route).expect("insert route");
+        }
 
-    pub fn default_route(mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> Self {
-        self.default = route.into();
-        self
-    }
-
-    pub fn build(self) -> Router<'h, Req, Res, Fmt> {
         Router {
             inner: Arc::new(RouterImpl {
-                inner: self.inner,
+                inner,
                 default: self.default,
             }),
-            formatter: self.formatter,
+            formatter: Fmt::default(), // TODO: Non-default formatter
         }
     }
 }
@@ -130,19 +143,42 @@ pub struct RequestService<'h, Req, Res, Fmt> {
     router: Arc<RouterImpl<'h, Req, Res, Fmt>>,
 }
 
+#[derive(Debug, Error)]
+pub enum RouteError<'a> {
+    /// No matching route was found
+    #[error("not found")]
+    NotFound,
+
+    /// An almost matching route was found
+    #[error("expected uri: {0}")]
+    Expected(&'a Uri),
+
+    /// There was an error decoding the uri path
+    #[error("invalid param encoding: {0}")]
+    Path(InvalidParamEncoding),
+
+    /// The request method is not allowed
+    #[error("method not allowed")]
+    MethodNotAllowed { allow_header: &'a HeaderValue },
+}
+
 impl<'h, Fmt, B> Service<Request<B>> for RequestService<'h, Request<B>, Response<Body>, Fmt>
 where
-    Fmt: Formatter<Response<Body>, hyper::http::Error> + Clone + Send + Sync + 'h,
+    Fmt: Clone + Send + Sync + 'h,
+    Fmt: for<'a> Formatter<Response<Body>, RouteError<'a>>,
 {
     type Response = Response<Body>;
     type Error = Infallible;
-    type Future = RequestFuture<'h, Self::Response>;
+    type Future = RequestFuture<Self::Response, HandlerFuture<'h, Self::Response>>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // It's not possible to know if the route in question is ready, because the request has not
+        // been received yet. Meaning that backpressure across the router boundry is not possible.
         Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, mut req: Request<B>) -> Self::Future {
+        // Replace the path portion of a uri
         fn replace_path(uri: &Uri, path: impl Display) -> Uri {
             let mut parts = uri.to_owned().into_parts();
             parts.path_and_query = parts.path_and_query.map(|pq| {
@@ -156,64 +192,62 @@ where
             Uri::from_parts(parts).unwrap()
         }
 
+        // Add connection address information to the request's extensions
         req.extensions_mut()
             .insert(RemoteAddrExt::from(self.remote_addr));
 
-        enum MatchResult<'a, 'h, Req, Res, Fmt> {
-            Route(&'a Route<'h, Req, Res, Fmt>, Option<RouteParamsExt>),
-            Redirect(Uri),
-            InvalidParamEncoding(InvalidParamEncoding),
-        }
-
+        let uri;
         let res = match self.router.inner.at(req.uri().path()) {
-            Ok(route) => match route.params.try_into() {
-                Ok(params) => MatchResult::Route(route.value, Some(params)),
-                Err(err) => MatchResult::InvalidParamEncoding(err),
+            // A route was found. Attempt to parse the parameters and run the handler. If the
+            // parameters are invalid (eg. invalid percent-encoded utf8), reply with error.
+            Ok(route) => match RouteParamsExt::try_from(route.params) {
+                Ok(params) => Ok((route.value, Some(params))),
+                Err(err) => Err(RouteError::Path(err)),
             },
-            Err(MatchError::NotFound) => MatchResult::Route(&self.router.default, None),
+            // No route was found. Use the fallback if it exists, otherwise reply with error.
+            Err(MatchError::NotFound) => match self.router.default {
+                Some(ref route) => Ok((route, None)),
+                None => Err(RouteError::NotFound),
+            },
 
-            Err(MatchError::ExtraTrailingSlash) => MatchResult::Redirect(replace_path(
-                req.uri(),
-                req.uri().path().strip_suffix('/').unwrap(),
-            )),
-            Err(MatchError::MissingTrailingSlash) => MatchResult::Redirect(replace_path(
-                req.uri(),
-                format_args!("{}/", req.uri().path()),
-            )),
+            // There was either a trailing slash when there shouldn't be, or there wasn't a trailing
+            // slash when there should be. Reply with an error that should redirect the user to the
+            // correct path.
+            Err(MatchError::ExtraTrailingSlash) => {
+                uri = replace_path(req.uri(), req.uri().path().strip_suffix('/').unwrap());
+                Err(RouteError::Expected(&uri))
+            }
+            Err(MatchError::MissingTrailingSlash) => {
+                uri = replace_path(req.uri(), format_args!("{}/", req.uri().path()));
+                Err(RouteError::Expected(&uri))
+            }
         };
 
+        // Finally return the request future, either containing the route's future or an immediate
+        // reponse
         match res {
-            MatchResult::Route(route, params) => {
+            Ok((route, params)) => {
                 if let Some(params) = params {
                     req.extensions_mut().insert(params);
                 }
 
-                RequestFuture::Route((route.handler())(req, self.formatter.clone()))
+                RequestFuture::Route((route.handler_fn())(req, self.formatter.clone()))
             }
-            MatchResult::Redirect(uri) => RequestFuture::Response(Some(
-                Response::builder()
-                    .status(StatusCode::PERMANENT_REDIRECT)
-                    .header(header::LOCATION, uri.to_string())
-                    .body(Body::empty())
-                    .into_response(self.formatter.clone())
-                    .0,
-            )),
-            MatchResult::InvalidParamEncoding(_err) => RequestFuture::Response(Some(
-                StatusCode::BAD_REQUEST
-                    .into_response(self.formatter.clone())
-                    .0,
-            )),
+            Err(err) => RequestFuture::Response(Some(self.formatter.clone().format_error(err))),
         }
     }
 }
 
 #[pin_project(project = RequestFutureProj)]
-pub enum RequestFuture<'h, Res> {
-    Route(#[pin] HandlerFuture<'h, Res>),
+pub enum RequestFuture<Res, Fut> {
+    Route(#[pin] Fut),
     Response(Option<Res>),
 }
 
-impl<'h, Res> Future for RequestFuture<'h, Res> {
+impl<Res, Fut> Future for RequestFuture<Res, Fut>
+where
+    Fut: Future<Output = Res>,
+{
     type Output = Result<Res, Infallible>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
