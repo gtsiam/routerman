@@ -1,7 +1,3 @@
-pub(crate) mod ext;
-pub(crate) mod params;
-
-pub mod extract;
 use std::net::SocketAddr;
 
 use hyper::Body;
@@ -11,16 +7,20 @@ use self::{
     params::RouteParams,
 };
 
-// pub struct Request {
-//     inner: hyper::Request<Body>,
-// }
+pub(crate) mod ext;
+pub(crate) mod params;
+
+pub mod extract;
+
+pub type Request = hyper::Request<Body>;
 
 pub trait RequestExt {
     fn params(&self) -> &RouteParams;
     fn remote_address(&self) -> &SocketAddr;
 }
 
-impl<B> RequestExt for hyper::Request<B> {
+impl RequestExt for Request {
+    #[track_caller]
     fn params(&self) -> &RouteParams {
         &*self
             .extensions()

@@ -1,18 +1,19 @@
 use hyper::{Server, StatusCode};
-use routerman::{method::get, HyperRouter as Router};
+use routerman::{
+    method::get,
+    request::Request,
+    router::{Router, RouterBuilder},
+};
 
-type Request = hyper::Request<hyper::Body>;
-
-fn router() -> Router {
+fn router() -> RouterBuilder {
     Router::builder()
         .route("/hello", get(|_req: Request| async { "Hello, World!" }))
-        .default_route(|_req: Request| async { StatusCode::NOT_FOUND })
-        .build()
+        .default_route(|_req: Request| async { (StatusCode::IM_A_TEAPOT, "Want some tea?") })
 }
 
 #[tokio::main]
 async fn main() {
-    let router = router();
+    let router = router().build();
 
     let addr = &([127, 0, 0, 1], 8080).into();
     let server = Server::bind(addr).serve(router);

@@ -2,7 +2,7 @@
 
 use crate::mime;
 use crate::request::extract::ExtractFrom;
-use crate::response::{DefaultFormatter, Formatter, IntoResponse};
+use crate::response::{DefaultFormatter, Reply};
 use futures_util::Future;
 use hyper::body::HttpBody;
 use hyper::{body::Bytes, header, Body, Response};
@@ -125,28 +125,26 @@ where
     }
 }
 
-impl Formatter<Response<Body>, serde_json::Error> for DefaultFormatter {
-    fn format_error(self, err: serde_json::Error) -> Response<Body> {
-        (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-            .into_response(self)
-            .0
+impl Reply<serde_json::Error> for DefaultFormatter {
+    fn reply(self, err: serde_json::Error) -> Response<Body> {
+        (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).reply(self)
     }
 }
 
-impl<T, Fmt> IntoResponse<Response<Body>, Fmt> for Json<T>
+impl<T, Fmt> Reply<Fmt> for Json<T>
 where
     T: Serialize,
-    Fmt: Formatter<Response<Body>, serde_json::Error>
-        + Formatter<Response<Body>, hyper::http::Error>,
+    serde_json::Error: Reply<Fmt>,
+    hyper::http::Error: Reply<Fmt>,
 {
-    fn into_response(self, fmt: Fmt) -> (Response<Body>, Option<Fmt>) {
+    fn reply(self, fmt: Fmt) -> Response<Body> {
         match serde_json::to_vec(&self.0) {
             Ok(content) => (
                 [(header::CONTENT_TYPE, mime::APPLICATION_JSON.header())],
-                Response::new(Body::from(content)),
+                content,
             )
-                .into_response(fmt),
-            Err(err) => (fmt.format_error(err), None),
+                .reply(fmt),
+            Err(err) => err.reply(fmt),
         }
     }
 }

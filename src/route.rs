@@ -1,28 +1,26 @@
+use crate::{
+    request::Request,
+    response::{Reply, Response},
+};
+use futures_util::{Future, FutureExt};
 use std::{pin::Pin, sync::Arc};
 
-use futures_util::{Future, FutureExt};
-
-use crate::response::IntoResponse;
-
-pub(crate) type HandlerFuture<'h, Res> = Pin<Box<dyn Future<Output = Res> + Send + 'h>>;
-pub(crate) type HandlerFn<'h, Req, Res, Fmt> =
-    dyn Fn(Req, Fmt) -> HandlerFuture<'h, Res> + Send + Sync + 'h;
+pub(crate) type BoxFuture<Out> = Pin<Box<dyn Future<Output = Out> + Send + 'static>>;
+type HandlerFn<Fmt> = dyn Fn(Request, Fmt) -> BoxFuture<Response> + Send + Sync + 'static;
 
 #[derive(Clone)]
-pub struct Route<'h, Req, Res, Fmt>(Arc<HandlerFn<'h, Req, Res, Fmt>>);
+pub struct Route<Fmt>(Arc<HandlerFn<Fmt>>);
 
-impl<'h, Req, Res, Fmt> Route<'h, Req, Res, Fmt>
-where
-    Fmt: Send + Sync + 'h,
-{
+impl<Fmt> Route<Fmt> {
     pub fn new<H, Args>(handler: H) -> Self
     where
-        H: RouteHandler<'h, Req, Res, Fmt, Args>,
+        H: RouteHandler<Fmt, Args>,
+        Fmt: Send + Sync + 'static,
     {
         handler.into_route()
     }
 
-    pub(crate) fn handler_fn(&self) -> &HandlerFn<'h, Req, Res, Fmt> {
+    pub(crate) fn handler_fn(&self) -> &HandlerFn<Fmt> {
         &*self.0
     }
 }
@@ -31,31 +29,31 @@ where
 ///
 /// Note: The Args type argument is there to allow implementing on conflicting types (eg. `Fn(T1)`
 /// and `Fn(T1, T2)` which can, in theory, be implemented on the same type).
-pub trait RouteHandler<'h, Req, Res, Fmt, Args> {
-    fn into_route(self) -> Route<'h, Req, Res, Fmt>;
+pub trait RouteHandler<Fmt, Args> {
+    fn into_route(self) -> Route<Fmt>;
 }
 
 /// impl Handler for `async Fn(Req) -> Out`
-impl<'h, H, Fut, Req, Res, Fmt, Out> RouteHandler<'h, Req, Res, Fmt, (Req,)> for H
+impl<H, Fut, Fmt, Out> RouteHandler<Fmt, (Request,)> for H
 where
-    H: Fn(Req) -> Fut + Send + Sync + 'h,
-    Fut: Future<Output = Out> + Send + 'h,
-    Out: IntoResponse<Res, Fmt>,
-    Fmt: Send + Sync + 'h,
+    H: Fn(Request) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Out> + Send + 'static,
+    Out: Reply<Fmt>,
+    Fmt: Send + Sync + 'static,
 {
-    fn into_route(self) -> Route<'h, Req, Res, Fmt> {
-        (move |req, fmt| self(req).map(|res| res.into_response(fmt).0)).into_route()
+    fn into_route(self) -> Route<Fmt> {
+        (move |req, fmt| self(req).map(|res| res.reply(fmt))).into_route()
     }
 }
 
 /// impl Handler for `async Fn(Req, Fmt) -> Res`
-impl<'h, H, Fut, Req, Res, Fmt> RouteHandler<'h, Req, Res, Fmt, (Req, Fmt)> for H
+impl<H, Fut, Fmt> RouteHandler<Fmt, (Request, Fmt)> for H
 where
-    H: Fn(Req, Fmt) -> Fut + Send + Sync + 'h,
-    Fut: Future<Output = Res> + Send + 'h,
-    Fmt: Send + Sync + 'h,
+    H: Fn(Request, Fmt) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Response> + Send + 'static,
+    Fmt: Send + Sync + 'static,
 {
-    fn into_route(self) -> Route<'h, Req, Res, Fmt> {
+    fn into_route(self) -> Route<Fmt> {
         Route(Arc::new(move |req, fmt| Box::pin(self(req, fmt))))
     }
 }

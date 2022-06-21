@@ -1,19 +1,22 @@
-use crate::route::{Route, RouteHandler};
-use crate::{response::Formatter, router::RouteError};
-use hyper::{header::HeaderValue, Body, Method, Request, Response};
+use crate::{
+    request::Request,
+    response::Reply,
+    route::{Route, RouteHandler},
+};
+use hyper::{header::HeaderValue, Method};
 use std::{collections::HashMap, future::ready};
 
-pub struct MethodRouter<'h, Req, Res, Fmt> {
-    handlers: HashMap<Method, Route<'h, Req, Res, Fmt>>,
-    fallback: MethodFallback<'h, Req, Res, Fmt>,
+pub struct MethodRouter<Fmt> {
+    handlers: HashMap<Method, Route<Fmt>>,
+    fallback: MethodFallback<Fmt>,
 }
 
-enum MethodFallback<'h, Req, Res, Fmt> {
-    Route(Route<'h, Req, Res, Fmt>),
+enum MethodFallback<Fmt> {
+    Route(Route<Fmt>),
     None { allow_header: HeaderValue },
 }
 
-impl<'h, Req, Res, Fmt> MethodRouter<'h, Req, Res, Fmt> {
+impl<Fmt> MethodRouter<Fmt> {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
@@ -25,7 +28,7 @@ impl<'h, Req, Res, Fmt> MethodRouter<'h, Req, Res, Fmt> {
 
     pub fn set_method<H, Args>(&mut self, method: Method, route: H) -> &mut Self
     where
-        H: RouteHandler<'h, Req, Res, Fmt, Args>,
+        H: RouteHandler<Fmt, Args>,
     {
         self.handlers.insert(method, route.into_route());
         self.update_allow_header();
@@ -35,20 +38,20 @@ impl<'h, Req, Res, Fmt> MethodRouter<'h, Req, Res, Fmt> {
     #[inline]
     pub fn method<H, Args>(mut self, method: Method, route: H) -> Self
     where
-        H: RouteHandler<'h, Req, Res, Fmt, Args>,
+        H: RouteHandler<Fmt, Args>,
     {
         self.set_method(method, route);
         self
     }
 
     #[inline]
-    pub fn set_fallback(&mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> &mut Self {
+    pub fn set_fallback(&mut self, route: impl Into<Route<Fmt>>) -> &mut Self {
         self.fallback = MethodFallback::Route(route.into());
         self
     }
 
     #[inline]
-    pub fn fallback(mut self, route: impl Into<Route<'h, Req, Res, Fmt>>) -> Self {
+    pub fn fallback(mut self, route: impl Into<Route<Fmt>>) -> Self {
         self.set_fallback(route);
         self
     }
@@ -91,9 +94,9 @@ macro_rules! impl_method_helpers {
     ($($name:ident -> $method:ident)*) => {
         $(
             #[inline]
-            pub fn $name<'h, H, Req, Res, Fmt, Args>(route: H) -> MethodRouter<'h, Req, Res, Fmt>
+            pub fn $name<H, Fmt, Args>(route: H) -> MethodRouter< Fmt>
             where
-                H: RouteHandler<'h, Req, Res, Fmt, Args>
+                H: RouteHandler< Fmt, Args>
             {
                 MethodRouter::new().method(Method::$method, route)
             }
@@ -113,7 +116,7 @@ impl_method_helpers! {
     trace -> TRACE
 }
 
-impl<'h, Req, Res, Fmt> core::ops::BitOr<Self> for MethodRouter<'h, Req, Res, Fmt> {
+impl<Fmt> core::ops::BitOr<Self> for MethodRouter<Fmt> {
     type Output = Self;
 
     #[inline]
@@ -122,36 +125,38 @@ impl<'h, Req, Res, Fmt> core::ops::BitOr<Self> for MethodRouter<'h, Req, Res, Fm
     }
 }
 
-impl<'h, Req, Res, Fmt> core::ops::BitOrAssign<Self> for MethodRouter<'h, Req, Res, Fmt> {
+impl<Fmt> core::ops::BitOrAssign<Self> for MethodRouter<Fmt> {
     #[inline]
     fn bitor_assign(&mut self, rhs: Self) {
         self.merge(rhs)
     }
 }
 
-impl<'h, Fmt, B> RouteHandler<'h, Request<B>, Response<Body>, Fmt, ()>
-    for MethodRouter<'h, Request<B>, Response<Body>, Fmt>
+pub struct MethodNotAllowed<'a> {
+    pub allow_header: &'a HeaderValue,
+}
+
+impl<Fmt> RouteHandler<Fmt, ()> for MethodRouter<Fmt>
 where
-    Fmt: for<'a> Formatter<Response<Body>, RouteError<'a>>,
-    Fmt: Send + Sync + 'h,
-    B: 'h,
+    Fmt: Send + Sync + 'static,
+    for<'a> MethodNotAllowed<'a>: Reply<Fmt>,
 {
-    fn into_route(self) -> Route<'h, Request<B>, Response<Body>, Fmt> {
+    fn into_route(self) -> Route<Fmt> {
         Route::new(
-            move |req: Request<B>, fmt: Fmt| match self.handlers.get(req.method()) {
+            move |req: Request, fmt: Fmt| match self.handlers.get(req.method()) {
                 Some(route) => (route.handler_fn())(req, fmt),
                 None => match &self.fallback {
                     MethodFallback::Route(route) => (route.handler_fn())(req, fmt),
-                    MethodFallback::None { allow_header } => Box::pin(ready(
-                        fmt.format_error(RouteError::MethodNotAllowed { allow_header }),
-                    )),
+                    MethodFallback::None { allow_header } => {
+                        Box::pin(ready(MethodNotAllowed { allow_header }.reply(fmt)))
+                    }
                 },
             },
         )
     }
 }
 
-impl<'h, Req, Res, Fmt> Default for MethodRouter<'h, Req, Res, Fmt> {
+impl<Fmt> Default for MethodRouter<Fmt> {
     #[inline]
     fn default() -> Self {
         Self::new()

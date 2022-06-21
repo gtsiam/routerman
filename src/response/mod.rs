@@ -1,77 +1,50 @@
-use std::{convert::Infallible, error::Error as StdError};
+use std::convert::Infallible;
 
 use hyper::Body;
+
 mod impls;
 mod parts;
 
-// pub struct Response {
-//     inner: hyper::Response<Body>,
-// }
+pub type Response = hyper::Response<Body>;
 
-pub trait IntoResponse<Res, Fmt> {
-    fn into_response(self, fmt: Fmt) -> (Res, Option<Fmt>);
+pub trait Reply<Fmt> {
+    fn reply(self, fmt: Fmt) -> Response;
 }
 
-pub trait ResponsePart<Res, Fmt> {
-    fn response_part(self, res: Res, fmt: Fmt) -> (Res, Option<Fmt>);
-}
-
-pub trait Formatter<Res, Err> {
-    fn format_error(self, err: Err) -> Res;
+pub trait ReplyPart<Fmt> {
+    fn reply_part(self, res: Response, fmt: Fmt) -> (Response, Option<Fmt>);
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultFormatter;
 
-pub trait ErrorResponse: StdError {}
-
-impl<T, E, Res, Fmt> IntoResponse<Res, Fmt> for std::result::Result<T, E>
+impl<T, E, Fmt> Reply<Fmt> for std::result::Result<T, E>
 where
-    T: IntoResponse<Res, Fmt>,
-    E: IntoResponse<Res, Fmt>,
+    T: Reply<Fmt>,
+    E: Reply<Fmt>,
 {
-    fn into_response(self, fmt: Fmt) -> (Res, Option<Fmt>) {
+    fn reply(self, fmt: Fmt) -> Response {
         match self {
-            Ok(res) => res.into_response(fmt),
-            Err(res) => res.into_response(fmt),
+            Ok(res) => res.reply(fmt),
+            Err(res) => res.reply(fmt),
         }
     }
 }
 
-impl<Res, Fmt> Formatter<Res, Infallible> for Fmt {
-    fn format_error(self, err: Infallible) -> Res {
-        match err {}
-    }
-}
-
-impl<Res, Fmt> IntoResponse<Res, Fmt> for Infallible {
-    fn into_response(self, _fmt: Fmt) -> (Res, Option<Fmt>) {
+impl<Fmt> Reply<Fmt> for Infallible {
+    fn reply(self, _fmt: Fmt) -> Response {
         match self {}
     }
 }
 
-#[macro_export]
-macro_rules! respond {
-    ($into_response:expr, $fmt:expr) => {
-        match $into_response.into_response($fmt) {
-            (res, Some(fmt)) => (res, fmt),
-            (res, None) => return (res, None),
-        }
-    };
-    ($into_response:expr, $res:expr, $fmt:expr) => {
-        match $into_response.response_part($res, $fmt) {
-            (res, Some(fmt)) => (res, fmt),
-            (res, None) => return (res, None),
-        }
-    };
+impl<Fmt> Reply<Fmt> for () {
+    fn reply(self, _fmt: Fmt) -> Response {
+        Response::default()
+    }
 }
 
-#[macro_export]
-macro_rules! try_respond {
-    ($result:expr, $formatter:expr) => {
-        match $result {
-            Ok(val) => val,
-            Err(err) => return ($formatter.format_error(err), None),
-        }
-    };
+impl<Fmt> ReplyPart<Fmt> for () {
+    fn reply_part(self, res: Response, fmt: Fmt) -> (Response, Option<Fmt>) {
+        (res, Some(fmt))
+    }
 }

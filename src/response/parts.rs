@@ -1,43 +1,41 @@
-use super::{IntoResponse, ResponsePart};
-use crate::respond;
+use super::{Reply, ReplyPart, Response};
 
 macro_rules! impl_response_parts {
-    () => {
-        impl<Res, Fmt, R> IntoResponse<Res, Fmt> for (R,)
-        where
-            R: IntoResponse<Res, Fmt>,
-        {
-            fn into_response(self, fmt: Fmt) -> (Res, Option<Fmt>) {
-                self.0.into_response(fmt)
-            }
-        }
-    };
+    () => { };
     ($($ty:ident),*) => {
-        impl<Res, Fmt, $($ty,)* R> IntoResponse<Res, Fmt> for ($($ty,)* R)
+        impl<Fmt, $($ty,)*> Reply<Fmt> for ($($ty,)*)
         where
-            $($ty: ResponsePart<Res, Fmt>,)*
-            R: IntoResponse<Res, Fmt>,
+            $($ty: ReplyPart<Fmt>,)*
         {
-            fn into_response(self, fmt: Fmt) -> (Res, Option<Fmt>) {
-                #[allow(non_snake_case)]
-                let ($($ty,)* R) = self;
-
-                let (res, fmt) = respond!(R, fmt);
-                $(let (res, fmt) = respond!($ty, res, fmt);)*
-
-                (res, Some(fmt))
-            }
-        }
-
-        impl<Res, Fmt, $($ty,)*> ResponsePart<Res, Fmt> for ($($ty,)*)
-        where
-            $($ty: ResponsePart<Res, Fmt>,)*
-        {
-            fn response_part(self, res: Res, fmt: Fmt) -> (Res, Option<Fmt>) {
+            fn reply(self, fmt: Fmt) -> Response {
                 #[allow(non_snake_case)]
                 let ($($ty,)*) = self;
 
-                $(let (res, fmt) = respond!($ty, res, fmt);)*
+                let res = Response::default();
+                $(
+                    #[allow(unused)]
+                    let (res, fmt) = match $ty.reply_part(res, fmt) {
+                        (res, Some(fmt)) => (res, fmt),
+                        (res, None) => return res,
+                    };
+                )*
+
+                res
+            }
+        }
+
+        impl<Fmt, $($ty),*> ReplyPart<Fmt> for ($($ty,)*)
+        where
+            $($ty: ReplyPart<Fmt>,)*
+        {
+            fn reply_part(self, res: Response, fmt: Fmt) -> (Response, Option<Fmt>) {
+                #[allow(non_snake_case)]
+                let ($($ty,)*) = self;
+
+                $(let (res, fmt) = match $ty.reply_part(res, fmt) {
+                    (res, Some(fmt)) => (res, fmt),
+                    r => return r,
+                };)*
 
                 (res, Some(fmt))
             }

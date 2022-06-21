@@ -1,10 +1,11 @@
-use std::{net::SocketAddr, ops::Deref};
-
+use super::params::RouteParams;
+use std::{
+    net::SocketAddr,
+    ops::{Deref, DerefMut},
+};
 use thiserror::Error;
 
-use super::params::RouteParams;
-
-pub struct RemoteAddrExt(SocketAddr);
+pub struct RemoteAddrExt(pub SocketAddr);
 
 impl Deref for RemoteAddrExt {
     type Target = SocketAddr;
@@ -14,9 +15,15 @@ impl Deref for RemoteAddrExt {
     }
 }
 
-impl From<SocketAddr> for RemoteAddrExt {
-    fn from(addr: SocketAddr) -> Self {
-        Self(addr)
+impl DerefMut for RemoteAddrExt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<RemoteAddrExt> for SocketAddr {
+    fn from(ext: RemoteAddrExt) -> Self {
+        ext.0
     }
 }
 
@@ -27,6 +34,18 @@ impl Deref for RouteParamsExt {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl DerefMut for RouteParamsExt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<RouteParamsExt> for RouteParams {
+    fn from(ext: RouteParamsExt) -> Self {
+        ext.0
     }
 }
 
