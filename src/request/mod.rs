@@ -22,16 +22,14 @@ pub trait RequestExt {
 impl RequestExt for Request {
     #[track_caller]
     fn params(&self) -> &RouteParams {
-        &*self
-            .extensions()
+        self.extensions()
             .get::<RouteParamsExt>()
             .expect("missing request parameters (request not processed by routerman?)")
     }
 
     #[track_caller]
     fn remote_address(&self) -> &SocketAddr {
-        &*self
-            .extensions()
+        self.extensions()
             .get::<RemoteAddrExt>()
             .expect("missing remote address (request not processed by routerman?)")
     }

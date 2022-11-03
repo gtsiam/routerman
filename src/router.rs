@@ -82,7 +82,7 @@ where
 
         // Merge default routes
         if let Some(route) = router.default {
-            if let Some(_) = default.replace(route) {
+            if default.replace(route).is_some() {
                 panic!("cannot merge routers with conflicting default routes")
             }
         }
@@ -242,7 +242,7 @@ impl Future for RequestFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.as_mut().project() {
-            RequestFutureProj::Route(fut) => return Poll::Ready(Ok(ready!(fut.poll(cx)))),
+            RequestFutureProj::Route(fut) => Poll::Ready(Ok(ready!(fut.poll(cx)))),
             RequestFutureProj::Response(res @ Some(_)) => Poll::Ready(Ok(res.take().unwrap())),
             RequestFutureProj::Response(None) => panic!("future polled after completion"),
         }

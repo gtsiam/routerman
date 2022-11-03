@@ -12,7 +12,7 @@ pub trait ExtractFrom<Req: ?Sized>: Sized {
     fn extract_from(req: Req) -> Self::Future;
 }
 
-impl<'a, B> ExtractFrom<Request<B>> for Bytes
+impl<B> ExtractFrom<Request<B>> for Bytes
 where
     B: HttpBody + Send + 'static,
     B::Data: Send,
@@ -21,6 +21,6 @@ where
     type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>> + Send>>;
 
     fn extract_from(req: Request<B>) -> Self::Future {
-        Box::pin(async move { Ok(hyper::body::to_bytes(req.into_body()).await?) })
+        Box::pin(async move { hyper::body::to_bytes(req.into_body()).await })
     }
 }

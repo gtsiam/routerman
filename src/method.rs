@@ -85,7 +85,7 @@ impl<Fmt> MethodRouter<Fmt> {
             methods.sort();
 
             // Header names are possible to encode in http, so this should never panic
-            *allow_header = HeaderValue::from_str(&*methods.join(", ")).unwrap();
+            *allow_header = HeaderValue::from_str(&methods.join(", ")).unwrap();
         }
     }
 }
